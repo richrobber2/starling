@@ -1,0 +1,43 @@
+name: Build actual Starling browser client
+on:
+  push:
+    branches: ['starling-web-build/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: starling-browser-build-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Reconstruct pinned public source and verified port overlay
+        shell: bash
+        run: |
+          mkdir -p .starling-ci/context/upstream
+          git -C .starling-ci/context/upstream init
+          git -C .starling-ci/context/upstream remote add origin https://github.com/starling-client/starling.git
+          git -C .starling-ci/context/upstream fetch --depth=1 origin 17ea954d6f131405261dba41aa21ad0c2b5b3ae3
+          git -C .starling-ci/context/upstream checkout --detach FETCH_HEAD
+          test "$(git -C .starling-ci/context/upstream rev-parse HEAD)" = 17ea954d6f131405261dba41aa21ad0c2b5b3ae3
+          node .starling-ci/reconstruct.mjs
+      - name: Compile actual client and exercise WASI binding/thread fixtures
+        shell: bash
+        run: |
+          docker build --progress=plain --target build -f .starling-ci/context/cloud-build/Dockerfile -t starling-browser-build .starling-ci/context
+          container=$(docker create starling-browser-build)
+          trap 'docker rm "$container" >/dev/null' EXIT
+          mkdir -p .starling-ci/output
+          docker cp "$container:/work/artifacts/." .starling-ci/output/
+      - name: Retain build output for testing
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: starling-browser-client
+          path: .starling-ci/output/
+          if-no-files-found: error
+          retention-days: 1
